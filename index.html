@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ырлар — угадай тувинскую песню</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Unbounded:wght@500;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <button class="logo" data-go="home" aria-label="На главную">
+      <svg viewBox="0 0 32 32" fill="none" aria-hidden="true">
+        <circle cx="16" cy="11" r="5" fill="#f4b942"/>
+        <path d="M2 27 L11 15 L16 21 L21 14 L30 27 Z" fill="#5ad1c5" opacity=".9"/>
+        <path d="M2 27 L11 15 L14 19" stroke="#0a0e1c" stroke-width="1.4"/>
+      </svg>
+      ЫРЛАР
+    </button>
+    <button class="nav-btn admin-only" data-go="songs">Песни</button>
+  </header>
+
+  <div class="banner" id="yt-banner"></div>
+
+  <!-- ГЛАВНАЯ -->
+  <section class="screen active" id="screen-home">
+    <div class="hero">
+      <h1>ЫРЛАР</h1>
+      <p>Угадай тувинскую песню по первым секундам</p>
+      <div class="ladder" id="ladder"></div>
+    </div>
+    <div class="card">
+      <div class="home-actions">
+        <button class="btn btn-primary" id="btn-play">Играть</button>
+        <button class="btn btn-ghost admin-only" data-go="songs" id="btn-songs">Песни</button>
+      </div>
+      <div class="stats">
+        <div><b id="st-count">0</b><span class="muted small">песен в игре</span></div>
+        <div><b id="st-best">—</b><span class="muted small">лучший счёт</span></div>
+      </div>
+    </div>
+    <div class="howto card" style="margin-top:12px">
+      <div><i>1</i><span>Нажми ▶ и послушай отрывок. Сначала всего полсекунды.</span></div>
+      <div><i>2</i><span>Начни писать название или исполнителя и выбери песню из списка.</span></div>
+      <div><i>3</i><span>Не узнал — жми «Пропустить», отрывок станет длиннее. Чем раньше угадаешь, тем больше очков.</span></div>
+      <div><i>●</i><span><b style="color:var(--part)">Жёлтый</b> — исполнитель верный, песня нет. <b style="color:var(--bad)">Красный</b> — мимо.</span></div>
+    </div>
+  </section>
+
+  <!-- ИГРА -->
+  <section class="screen" id="screen-game">
+    <div class="game-top">
+      <div>
+        <div class="small muted" id="g-counter">Песня 1 из 5</div>
+        <div class="dots" id="g-dots" style="margin-top:6px"></div>
+      </div>
+      <div class="score-pill" id="g-score">0</div>
+    </div>
+
+    <div class="attempts" id="g-attempts"></div>
+
+    <div id="g-play-area">
+      <div class="timeline" id="g-timeline"><div class="unlocked" id="g-unlocked"></div><div class="prog" id="g-prog"></div></div>
+      <div class="ticks" id="g-ticks"></div>
+
+      <div class="player-box">
+        <button class="play" id="g-playbtn" aria-label="Слушать">
+          <svg id="ico-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg>
+          <svg id="ico-stop" viewBox="0 0 24 24" fill="currentColor" style="display:none"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+        </button>
+        <div class="play-label" id="g-playlabel">Слушать 0,5 с</div>
+      </div>
+
+      <div class="guess-box">
+        <div class="sugg" id="g-sugg"></div>
+        <input class="guess-input" id="g-input" placeholder="Название или исполнитель…" autocomplete="off" autocorrect="off" spellcheck="false">
+      </div>
+      <div class="guess-actions">
+        <button class="btn btn-ghost" id="g-skip">Пропустить</button>
+        <button class="btn btn-primary" id="g-answer" disabled>Ответить</button>
+      </div>
+    </div>
+
+    <div class="reveal card" id="g-reveal" style="display:none">
+      <div class="cover" id="r-cover"></div>
+      <h2 id="r-title"></h2>
+      <div class="artist" id="r-artist"></div>
+      <div class="verdict" id="r-verdict"></div>
+      <div class="row">
+        <button class="btn btn-ghost" id="r-listen">▶ Послушать</button>
+        <button class="btn btn-primary" id="r-next">Следующая →</button>
+      </div>
+      <div style="margin-top:12px"><a id="r-link" href="#" target="_blank" rel="noopener" class="small">Открыть на YouTube</a></div>
+    </div>
+  </section>
+
+  <!-- ИТОГИ -->
+  <section class="screen" id="screen-result">
+    <div class="card">
+      <div class="total"><span class="muted">Твой счёт</span><b id="res-total">0</b><span class="muted small" id="res-best"></span></div>
+      <div class="res-list" id="res-list"></div>
+      <div class="row">
+        <button class="btn btn-primary grow" id="res-again">Ещё раз</button>
+        <button class="btn btn-ghost grow" id="res-share">Скопировать результат</button>
+      </div>
+      <textarea class="share-fallback" id="res-share-text" readonly></textarea>
+    </div>
+  </section>
+
+  <!-- ПЕСНИ -->
+  <section class="screen" id="screen-songs">
+    <div class="small muted" style="margin:0 0 10px">Режим автора: этот экран видишь только ты. <a href="#player">Выйти из режима автора</a></div>
+    <div class="card">
+      <h3 style="font-size:17px;margin-bottom:14px" id="f-heading">Добавить песню</h3>
+      <div class="field">
+        <label for="f-url">Ссылка на YouTube</label>
+        <input id="f-url" placeholder="https://youtu.be/…" inputmode="url">
+      </div>
+      <div class="url-preview" id="f-preview"><img id="f-thumb" alt=""><span id="f-preview-text"></span></div>
+      <div class="row">
+        <div class="field grow"><label for="f-artist">Исполнитель</label><input id="f-artist" placeholder="Кто поёт"></div>
+      </div>
+      <div class="field"><label for="f-title">Название песни</label><input id="f-title" placeholder="Как называется"></div>
+      <div class="field">
+        <label for="f-start">С какого места начинать (если в начале видео заставка или тишина)</label>
+        <input id="f-start" placeholder="0:00" inputmode="numeric" style="max-width:140px">
+      </div>
+      <div class="form-msg" id="f-msg"></div>
+      <div class="row">
+        <button class="btn btn-ghost" id="f-test">▶ Проверить</button>
+        <button class="btn btn-primary grow" id="f-save">Добавить</button>
+      </div>
+      <button class="btn btn-ghost" id="f-cancel" style="display:none;margin-top:10px;width:100%">Отменить редактирование</button>
+    </div>
+
+    <div class="save-notice" id="save-notice" style="display:none"></div>
+    <div class="section-title"><h3 id="list-title">Список песен</h3><input id="list-search" placeholder="Поиск" style="width:150px;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:#0e1430;outline:none;font-size:14px"></div>
+    <div class="song-list" id="song-list"></div>
+
+    <details class="card" style="margin-top:16px">
+      <summary>Добавить много песен сразу</summary>
+      <p class="small muted">По одной песне на строку: <code>ссылка ; исполнитель ; название ; начало</code>. Начало можно не писать.</p>
+      <div class="field"><textarea id="bulk-text" placeholder="https://youtu.be/xxxxxxxxxxx ; Исполнитель ; Название ; 0:05"></textarea></div>
+      <button class="btn btn-ghost" id="bulk-add">Добавить из текста</button>
+      <div class="form-msg" id="bulk-msg" style="margin-top:10px"></div>
+    </details>
+
+    <details class="card" style="margin-top:12px" id="save-box">
+      <summary>Сохранить для всех игроков</summary>
+      <p class="small muted">Песни, добавленные здесь, видишь только ты. Чтобы они появились у всех:</p>
+      <ol class="small muted" style="padding-left:18px;line-height:1.6">
+        <li>Нажми «Скопировать».</li>
+        <li>Открой файл <code>songs.json</code> в своём репозитории на GitHub (кнопка ниже) и нажми карандаш ✎ (Edit), если редактор не открылся сам.</li>
+        <li>Выдели всё старое (Ctrl+A), вставь скопированное (Ctrl+V).</li>
+        <li>Нажми <b>Commit changes</b>. Через 1–2 минуты сайт обновится сам.</li>
+      </ol>
+      <div class="field"><textarea id="export-text" readonly></textarea></div>
+      <div class="row" style="flex-wrap:wrap">
+        <button class="btn btn-ghost" id="export-copy">Скопировать</button>
+        <a class="btn btn-ghost" id="gh-link" href="#" target="_blank" rel="noopener" style="display:none;text-decoration:none">Открыть songs.json на GitHub ↗</a>
+      </div>
+    </details>
+  </section>
+</div>
+
+<div id="yt-wrap"><div id="yt"></div></div>
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
