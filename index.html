@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ырылар — угадай тувинскую песню</title>
+<title>Ырлар — угадай тувинскую песню</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Unbounded:wght@500;700;800&display=swap" rel="stylesheet">
@@ -18,7 +18,7 @@
         <path d="M2 27 L11 15 L16 21 L21 14 L30 27 Z" fill="#5ad1c5" opacity=".9"/>
         <path d="M2 27 L11 15 L14 19" stroke="#0a0e1c" stroke-width="1.4"/>
       </svg>
-      ЫРЫЛАР
+      ЫРЛАР
     </button>
     <button class="nav-btn admin-only" data-go="songs">Песни</button>
   </header>
@@ -28,7 +28,7 @@
   <!-- ГЛАВНАЯ -->
   <section class="screen active" id="screen-home">
     <div class="hero">
-      <h1>ЫРЫЛАР</h1>
+      <h1>ЫРЛАР</h1>
       <p>Угадай тувинскую песню по первым секундам</p>
       <div class="ladder" id="ladder"></div>
     </div>
@@ -115,17 +115,31 @@
     <div class="small muted" style="margin:0 0 10px">Режим автора: этот экран видишь только ты. <a href="#player">Выйти из режима автора</a></div>
     <div class="card">
       <h3 style="font-size:17px;margin-bottom:14px" id="f-heading">Добавить песню</h3>
-      <div class="field">
-        <label for="f-url">Ссылка на YouTube</label>
-        <input id="f-url" placeholder="https://youtu.be/…" inputmode="url">
+      <div class="seg" id="f-mode">
+        <button data-mode="yt" class="on">Ссылка YouTube</button>
+        <button data-mode="file">Файл mp3</button>
       </div>
-      <div class="url-preview" id="f-preview"><img id="f-thumb" alt=""><span id="f-preview-text"></span></div>
+      <div id="f-yt-fields">
+        <div class="field">
+          <label for="f-url">Ссылка на YouTube</label>
+          <input id="f-url" placeholder="https://youtu.be/…" inputmode="url">
+        </div>
+        <div class="url-preview" id="f-preview"><img id="f-thumb" alt=""><span id="f-preview-text"></span></div>
+      </div>
+      <div id="f-file-fields" style="display:none">
+        <div class="field">
+          <label for="f-file">Файл с песней (из ВК, Telegram, откуда угодно)</label>
+          <input type="file" id="f-file" accept="audio/*,.mp3,.m4a,.ogg,.wav" class="file-input">
+          <div class="small muted" id="f-file-info"></div>
+        </div>
+        <p class="small muted" style="margin:-4px 0 12px">Совет: назови файл «Исполнитель - Название.mp3», тогда поля ниже заполнятся сами.</p>
+      </div>
       <div class="row">
         <div class="field grow"><label for="f-artist">Исполнитель</label><input id="f-artist" placeholder="Кто поёт"></div>
       </div>
       <div class="field"><label for="f-title">Название песни</label><input id="f-title" placeholder="Как называется"></div>
       <div class="field">
-        <label for="f-start">С какого места начинать (если в начале видео заставка или тишина)</label>
+        <label for="f-start" id="f-start-label">С какого места начинать (если в начале видео заставка или тишина)</label>
         <input id="f-start" placeholder="0:00" inputmode="numeric" style="max-width:140px">
       </div>
       <div class="form-msg" id="f-msg"></div>
@@ -134,6 +148,17 @@
         <button class="btn btn-primary grow" id="f-save">Добавить</button>
       </div>
       <button class="btn btn-ghost" id="f-cancel" style="display:none;margin-top:10px;width:100%">Отменить редактирование</button>
+
+      <div class="upload-box" id="f-upload" style="display:none">
+        <b>Отрывок готов (<span id="up-size"></span>). Осталось загрузить его на GitHub:</b>
+        <ol>
+          <li>Скачай файл (обычно скачивается сам): <a class="btn btn-ghost btn-sm" id="up-dl" href="#">⬇ Скачать</a></li>
+          <li>Открой папку <code>clips</code> в репозитории: <a class="btn btn-ghost btn-sm" id="up-gh" href="#" target="_blank" rel="noopener">Открыть на GitHub ↗</a></li>
+          <li>Перетащи туда скачанный файл → <b>Commit changes</b>.</li>
+          <li>Потом сохрани список песен, как обычно («Сохранить для всех игроков» внизу).</li>
+        </ol>
+        <button class="btn btn-ghost btn-sm" id="up-close">Понятно</button>
+      </div>
     </div>
 
     <div class="save-notice" id="save-notice" style="display:none"></div>
