@@ -22,6 +22,7 @@ const POINTS = [1000, 850, 700, 550, 400, 250]; // очки за угадыва�
 const ROUND_SIZE = 5;                       // песен за игру
 const REVEAL_SEC = 15;                      // сколько играет после ответа
 const PREVIEW_SEC = 3;                      // проверка на экране «Песни»
+const CLIP_SEC = 20;                        // длина отрывка, который вырезается из mp3
 
 /* ====== ПОМОЩНИКИ ====== */
 const $ = s => document.querySelector(s);
@@ -73,22 +74,34 @@ const isAdmin = () => document.body.classList.contains('admin');
 function applyAdmin(){
   if (location.hash === '#admin') store.set(LS_ADMIN, true);
   if (location.hash === '#player') store.set(LS_ADMIN, false);
+  const was = isAdmin();
   document.body.classList.toggle('admin', !!store.get(LS_ADMIN, false));
+  if (booted && was !== isAdmin()) loadLibrary();
   if (!isAdmin() && document.querySelector('#screen-songs.active')) show('home');
   else if (document.querySelector('#screen-home.active')) renderHome();
 }
 window.addEventListener('hashchange', applyAdmin);
 let library = [];
+let booted = false;
 
+// Песня — это либо видео YouTube {yt}, либо свой отрывок {file: "clips/....mp3"}
 function makeSong(o){
+  const artist = String(o.artist || '').trim(), title = String(o.title || '').trim();
+  if (!artist || !title) return null;
+  if (o.file){
+    const file = String(o.file).trim();
+    if (!/^[\w\-./]+\.(mp3|m4a|ogg|wav)$/i.test(file)) return null;
+    return { id: 'file:' + file, file, artist, title, start: 0 };
+  }
   const p = parseYouTube(o.yt || o.url);
-  if (!p || !String(o.artist||'').trim() || !String(o.title||'').trim()) return null;
+  if (!p) return null;
   const start = Number.isFinite(+o.start) && o.start !== '' && o.start != null ? Math.max(0, +o.start) : (p.start || 0);
-  return { id: p.id, yt: p.id, artist: String(o.artist).trim(), title: String(o.title).trim(), start, broken: !!o.broken };
+  return { id: p.id, yt: p.id, artist, title, start };
 }
 function loadLibrary(){
-  const saved = store.get(LS_SONGS, null);
-  const removed = new Set(store.get(LS_REMOVED, []));
+  // игроки видят только songs.json; свои правки — только в режиме автора
+  const saved = isAdmin() ? store.get(LS_SONGS, null) : null;
+  const removed = new Set(isAdmin() ? store.get(LS_REMOVED, []) : []);
   library = Array.isArray(saved) ? saved.map(makeSong).filter(Boolean) : [];
   const have = new Set(library.map(s => s.id));
   for (const b of BUILTIN_SONGS){
@@ -96,7 +109,7 @@ function loadLibrary(){
     if (s && !have.has(s.id) && !removed.has(s.id)){ library.push(s); have.add(s.id); }
   }
 }
-function saveLibrary(){ store.set(LS_SONGS, library); }
+function saveLibrary(){ if (isAdmin()) store.set(LS_SONGS, library.map(({ broken, ...rest }) => rest)); }
 function upsertSong(s){
   const i = library.findIndex(x => x.id === s.id);
   if (i >= 0) library[i] = s; else library.push(s);
@@ -238,6 +251,156 @@ const Player = {
   }
 };
 
+/* ====== СВОИ ОТРЫВКИ (mp3 из папки clips/) ======
+   Играют через Web Audio: точный старт и точная длина, без рекламы. */
+const LocalClips = { // отрывки, ещё не загруженные на GitHub, хранятся в браузере автора
+  db: null,
+  open(){
+    if (!this.db) this.db = new Promise((res, rej) => {
+      try { const r = indexedDB.open('irlar-clips', 1); r.onupgradeneeded = () => r.result.createObjectStore('clips'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); }
+      catch(e){ rej(e); }
+    });
+    return this.db;
+  },
+  async get(k){ try { const db = await this.open(); return await new Promise(res => { const q = db.transaction('clips').objectStore('clips').get(k); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); }); } catch(e){ return null; } },
+  async put(k, v){ try { const db = await this.open(); await new Promise(res => { const t = db.transaction('clips', 'readwrite'); t.objectStore('clips').put(v, k); t.oncomplete = res; t.onerror = res; }); } catch(e){} },
+  async del(k){ try { const db = await this.open(); await new Promise(res => { const t = db.transaction('clips', 'readwrite'); t.objectStore('clips').delete(k); t.oncomplete = res; t.onerror = res; }); } catch(e){} }
+};
+const Clip = {
+  ctx: null, buf: null, current: null, src: null, playing: false, ready: true,
+  loading: null, token: 0, onStop: null, onTick: null, raf: 0,
+  ensureCtx(){
+    if (!this.ctx){ const AC = window.AudioContext || window.webkitAudioContext; this.ctx = new AC(); }
+    if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => {});
+    return this.ctx;
+  },
+  async decode(arrayBuf){
+    const ctx = this.ensureCtx();
+    return await new Promise((res, rej) => ctx.decodeAudioData(arrayBuf, res, rej));
+  },
+  async fetchBuffer(song){
+    let ab = null;
+    if (isAdmin()){ const blob = await LocalClips.get(song.file); if (blob) ab = await blob.arrayBuffer(); }
+    if (!ab){
+      let r; try { r = await fetch(song.file, { cache: 'no-cache' }); } catch(e){ throw { code: 404 }; }
+      if (!r.ok) throw { code: 404 };
+      ab = await r.arrayBuffer();
+    }
+    try { return await this.decode(ab); } catch(e){ throw { code: 415 }; }
+  },
+  load(song, onWarm){
+    this.stop(true);
+    this.current = song; this.buf = null;
+    const tok = ++this.token;
+    this.loading = this.fetchBuffer(song).then(b => {
+      if (tok !== this.token) return;
+      this.buf = b; onWarm && onWarm();
+    }).catch(e => {
+      if (tok !== this.token) return;
+      this.loading = null;
+      Snd.onErr && Snd.onErr((e && e.code) || 404, song);
+    });
+  },
+  play(dur, { onTick, onStop } = {}){
+    if (!this.current) return;
+    this.stop(true); this.ensureCtx();
+    this.playing = true; this.onTick = onTick || null; this.onStop = onStop || null;
+    const tok = this.token;
+    const go = () => { if (this.playing && tok === this.token && this.buf) this._start(this.buf, this.current.start || 0, dur); };
+    if (this.buf) go(); else if (this.loading) this.loading.then(go); else this.stop();
+  },
+  preview(song, opts = {}){ this.load(song); this.play(PREVIEW_SEC, opts); },
+  // сыграть кусок любого буфера (используется и для проверки файла до сохранения)
+  playRaw(buf, offset, dur, { onStop } = {}){
+    this.stop(true); this.ensureCtx(); this.token++;
+    this.current = null; this.buf = null;
+    this.playing = true; this.onTick = null; this.onStop = onStop || null;
+    this._start(buf, offset, dur);
+  },
+  _start(buf, offset, dur){
+    const ctx = this.ctx;
+    const d = Math.max(0.05, Math.min(dur, buf.duration - offset));
+    const src = ctx.createBufferSource(); src.buffer = buf;
+    const g = ctx.createGain(); src.connect(g); g.connect(ctx.destination);
+    const t0 = ctx.currentTime + 0.03;
+    g.gain.setValueAtTime(1, t0); g.gain.setValueAtTime(1, t0 + Math.max(0, d - 0.03)); g.gain.linearRampToValueAtTime(0, t0 + d);
+    src.start(t0, offset, d);
+    this.src = src;
+    src.onended = () => { if (this.src === src) this.stop(); };
+    const loop = () => {
+      if (!this.playing || this.src !== src) return;
+      this.onTick && this.onTick(Math.max(0, Math.min(d, ctx.currentTime - t0)));
+      this.raf = requestAnimationFrame(loop);
+    };
+    cancelAnimationFrame(this.raf); this.raf = requestAnimationFrame(loop);
+  },
+  stop(silent){
+    cancelAnimationFrame(this.raf);
+    if (this.src){ const s = this.src; this.src = null; s.onended = null; try { s.stop(); } catch(e){} }
+    if (!this.playing) return;
+    this.playing = false;
+    const f = this.onStop; this.onStop = null; this.onTick = null;
+    if (!silent && f) f();
+  }
+};
+// Общий пульт: сам выбирает YouTube или свой отрывок
+const Snd = {
+  eng: Player, onErr: null,
+  pick(song){ const e = song && song.file ? Clip : Player; if (e !== this.eng){ this.eng.stop(true); this.eng = e; } return e; },
+  load(song, onWarm){ this.pick(song).load(song, onWarm); },
+  preview(song, opts){ this.pick(song).preview(song, opts); },
+  play(dur, opts){ this.eng.play(dur, opts); },
+  stop(silent){ Player.stop(silent); Clip.stop(silent); },
+  get playing(){ return Player.playing || Clip.playing; },
+  get ready(){ return this.eng.ready; }
+};
+Player.onErr = (code, song) => Snd.onErr && Snd.onErr(code, song);
+
+/* ====== ПОДГОТОВКА ОТРЫВКА ИЗ MP3 ====== */
+let lameLoading = null;
+function loadLame(){
+  if (window.lamejs) return Promise.resolve();
+  if (!lameLoading) lameLoading = new Promise((res, rej) => {
+    const sc = document.createElement('script'); sc.src = 'lame.min.js';
+    sc.onload = res; sc.onerror = () => { lameLoading = null; rej(new Error('lame')); };
+    document.head.appendChild(sc);
+  });
+  return lameLoading;
+}
+// вырезать len секунд с позиции start и закодировать в mp3 (44,1 кГц, 128 кбит/с)
+async function encodeClip(buf, start, len){
+  await loadLame();
+  const SR = 44100, ch = Math.min(2, buf.numberOfChannels);
+  const dur = Math.max(0.5, Math.min(len, buf.duration - start));
+  const off = new OfflineAudioContext(ch, Math.ceil(dur * SR), SR);
+  const s = off.createBufferSource(); s.buffer = buf; s.connect(off.destination); s.start(0, start, dur);
+  const seg = await off.startRendering();
+  const n = seg.length, fade = Math.min(n, Math.floor(0.3 * SR));
+  const to16 = x => { x = Math.max(-1, Math.min(1, x)); return x < 0 ? x * 0x8000 : x * 0x7fff; };
+  const chans = [];
+  for (let c = 0; c < ch; c++){
+    const src = seg.getChannelData(c), out = new Int16Array(n);
+    for (let i = 0; i < n; i++) out[i] = to16(src[i] * (i > n - fade ? (n - i) / fade : 1));
+    chans.push(out);
+  }
+  const enc = new lamejs.Mp3Encoder(ch, SR, 128), parts = [];
+  for (let i = 0; i < n; i += 1152){
+    const d = ch > 1 ? enc.encodeBuffer(chans[0].subarray(i, i + 1152), chans[1].subarray(i, i + 1152)) : enc.encodeBuffer(chans[0].subarray(i, i + 1152));
+    if (d.length) parts.push(new Uint8Array(d));
+  }
+  const e = enc.flush(); if (e.length) parts.push(new Uint8Array(e));
+  return { blob: new Blob(parts, { type: 'audio/mpeg' }), seconds: dur };
+}
+const TRANSLIT = {а:'a',б:'b',в:'v',г:'g',д:'d',е:'e',ё:'e',ж:'zh',з:'z',и:'i',й:'y',к:'k',л:'l',м:'m',н:'n',ң:'ng',о:'o',ө:'o',п:'p',р:'r',с:'s',т:'t',у:'u',ү:'u',ф:'f',х:'h',ц:'ts',ч:'ch',ш:'sh',щ:'sch',ъ:'',ы:'y',ь:'',э:'e',ю:'yu',я:'ya'};
+const slug = s => String(s).toLowerCase().split('').map(c => TRANSLIT[c] ?? c).join('').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'song';
+function clipPathFor(artist, title){
+  const base = 'clips/' + slug(artist) + '-' + slug(title);
+  let path = base + '.mp3', k = 2;
+  while (library.some(s => s.file === path)) path = `${base}-${k++}.mp3`;
+  return path;
+}
+const GITHUB_UPLOAD_URL = GITHUB_EDIT_URL ? GITHUB_EDIT_URL.replace(/\/edit\/main\/songs\.json$/, '/upload/main/clips') : '';
+
 function showYtProblem(kind){
   const b = $('#yt-banner');
   b.innerHTML = kind === 'referrer'
@@ -247,13 +410,14 @@ function showYtProblem(kind){
 }
 const ytErrorText = c => ({
   2: 'неправильная ссылка', 5: 'ошибка плеера', 100: 'видео удалено или скрыто',
-  101: 'автор запретил встраивать видео', 150: 'автор запретил встраивать видео', 153: 'YouTube не принимает этот сайт'
-}[c] || 'видео не играет');
+  101: 'автор запретил встраивать видео', 150: 'автор запретил встраивать видео', 153: 'YouTube не принимает этот сайт',
+  404: 'файл не найден — загружен ли он в clips/?', 415: 'файл повреждён или не аудио'
+}[c] || 'не играет');
 
 /* ====== ЭКРАНЫ ====== */
 function show(name){
   if (name === 'songs' && !isAdmin()) name = 'home';
-  Player.stop(true);
+  Snd.stop(true);
   $('#toast').classList.remove('show');
   document.querySelectorAll('.screen').forEach(s => s.classList.toggle('active', s.id === 'screen-' + name));
   if (name === 'home') renderHome();
@@ -292,10 +456,10 @@ function startSong(){
   G.cur = { song, step: 0, guesses: [], done: false, solved: false, warm: false };
   selected = null; $('#g-input').value = ''; hideSugg();
   renderGame();
-  Player.load(song, () => { if (G && G.cur && G.cur.song === song){ G.cur.warm = true; renderPlayLabel(); } });
+  Snd.load(song, () => { if (G && G.cur && G.cur.song === song){ G.cur.warm = true; renderPlayLabel(); } });
 }
-Player.onErr = (code, song) => {
-  if (song){ const s = library.find(x => x.id === song.id); if (s && code !== 153){ s.broken = true; saveLibrary(); } }
+Snd.onErr = (code, song) => {
+  if (song){ const s = library.find(x => x.id === song.id); if (s && code !== 153) s.broken = true; }
   if (!G || !G.cur || !song || G.cur.song.id !== song.id || G.cur.done) { if ($('#screen-songs').classList.contains('active')){ setMsg('#f-msg', 'Не играет: ' + ytErrorText(code), 'err'); renderSongs(); } return; }
   if (code === 153) return;
   toast(`«${song.title}» не играет (${ytErrorText(code)}) — беру другую`);
@@ -350,8 +514,8 @@ function renderGame(){
 }
 function renderPlayLabel(){
   const c = G.cur; if (!c || c.done) return;
-  $('#g-playlabel').textContent = Player.playing ? 'Играет…' : (!Player.ready ? 'Загружаю плеер…' : `Слушать ${fmtSec(STEPS[c.step])}`);
-  $('#g-playbtn').disabled = !Player.ready;
+  $('#g-playlabel').textContent = Snd.playing ? 'Играет…' : (!Snd.ready ? 'Загружаю плеер…' : `Слушать ${fmtSec(STEPS[c.step])}`);
+  $('#g-playbtn').disabled = !Snd.ready;
 }
 function setPlaying(on){
   $('#ico-play').style.display = on ? 'none' : '';
@@ -362,9 +526,9 @@ Player.whenReady(() => { if (G && G.cur) renderPlayLabel(); });
 
 $('#g-playbtn').addEventListener('click', () => {
   const c = G.cur; if (!c || c.done) return;
-  if (Player.playing){ Player.stop(); return; }
+  if (Snd.playing){ Snd.stop(); return; }
   setPlaying(true);
-  Player.play(STEPS[c.step], {
+  Snd.play(STEPS[c.step], {
     onTick: t => { $('#g-prog').style.width = pos(t) + '%'; },
     onStop: () => { setPlaying(false); renderPlayLabel(); }
   });
@@ -373,7 +537,7 @@ $('#g-playbtn').addEventListener('click', () => {
 
 function registerGuess(choice){
   const c = G.cur; if (!c || c.done) return;
-  Player.stop(true);
+  Snd.stop(true);
   let kind;
   if (!choice) kind = 'skip';
   else if (choice.id === c.song.id) kind = 'ok';
@@ -397,23 +561,26 @@ function finishSong(solved){
 }
 function renderReveal(){
   const c = G.cur, r = G.results[G.results.length - 1];
-  $('#r-cover').style.backgroundImage = `url(${thumb(c.song.yt).replace('mqdefault', 'hqdefault')})`;
+  const cover = $('#r-cover');
+  cover.style.backgroundImage = c.song.yt ? `url(${thumb(c.song.yt).replace('mqdefault', 'hqdefault')})` : '';
+  cover.classList.toggle('nocover', !c.song.yt);
   $('#r-title').textContent = c.song.title;
   $('#r-artist').textContent = c.song.artist;
   const v = $('#r-verdict');
   if (c.solved){ v.className = 'verdict ok'; v.textContent = `Угадал с ${c.guesses.length}-й попытки! +${r.points}`; }
   else { v.className = 'verdict fail'; v.textContent = 'Не угадал'; }
-  $('#r-link').href = `https://www.youtube.com/watch?v=${c.song.yt}&t=${Math.floor(c.song.start)}s`;
+  $('#r-link').style.display = c.song.yt ? '' : 'none';
+  if (c.song.yt) $('#r-link').href = `https://www.youtube.com/watch?v=${c.song.yt}&t=${Math.floor(c.song.start)}s`;
   $('#r-next').textContent = G.i + 1 >= G.songs.length ? 'Итоги →' : 'Следующая →';
   $('#r-listen').textContent = '▶ Послушать';
 }
 $('#r-listen').addEventListener('click', () => {
-  if (Player.playing){ Player.stop(); return; }
+  if (Snd.playing){ Snd.stop(); return; }
   $('#r-listen').textContent = '■ Стоп';
-  Player.play(REVEAL_SEC, { onStop: () => { $('#r-listen').textContent = '▶ Послушать'; } });
+  Snd.play(REVEAL_SEC, { onStop: () => { $('#r-listen').textContent = '▶ Послушать'; } });
 });
 $('#r-next').addEventListener('click', () => {
-  Player.stop(true);
+  Snd.stop(true);
   G.i++;
   if (G.i >= G.songs.length) showResult(); else startSong();
 });
@@ -492,8 +659,20 @@ $('#res-share').addEventListener('click', async () => {
 });
 
 /* ====== ЭКРАН «ПЕСНИ» ====== */
-let editingId = null, startTouched = false;
+let editingId = null, startTouched = false, mode = 'yt';
+let fileBuf = null, fileName = '';            // выбранный mp3 (весь, раскодированный)
 function setMsg(sel, text, kind){ const m = $(sel); m.textContent = text || ''; m.className = 'form-msg' + (kind ? ' ' + kind : ''); }
+function setMode(m){
+  mode = m;
+  document.querySelectorAll('#f-mode button').forEach(b => b.classList.toggle('on', b.dataset.mode === m));
+  $('#f-yt-fields').style.display = m === 'yt' ? '' : 'none';
+  $('#f-file-fields').style.display = m === 'file' ? '' : 'none';
+  $('#f-start-label').textContent = m === 'yt'
+    ? 'С какого места начинать (если в начале видео заставка или тишина)'
+    : `С какого места вырезать (возьмётся ${CLIP_SEC} секунд отсюда)`;
+  setMsg('#f-msg', '');
+}
+document.querySelectorAll('#f-mode button').forEach(b => b.addEventListener('click', () => { if (!editingId) setMode(b.dataset.mode); }));
 function readForm(){
   const p = parseYouTube($('#f-url').value);
   const start = parseTime($('#f-start').value);
@@ -515,23 +694,87 @@ $('#f-url').addEventListener('input', () => {
   }
 });
 $('#f-start').addEventListener('input', () => { startTouched = true; });
+
+// выбор mp3: раскодировать и подставить «Исполнитель - Название» из имени файла
+$('#f-file').addEventListener('change', async () => {
+  const f = $('#f-file').files[0];
+  fileBuf = null; fileName = '';
+  if (!f){ $('#f-file-info').textContent = ''; return; }
+  $('#f-file-info').textContent = 'Читаю файл…';
+  try {
+    fileBuf = await Clip.decode(await f.arrayBuffer());
+    fileName = f.name;
+    $('#f-file-info').textContent = `✓ ${f.name} · ${fmtTime(fileBuf.duration)}`;
+    const base = f.name.replace(/\.[^.]+$/, '').replace(/_/g, ' ').trim();
+    const m = base.match(/^(.+?)\s+[-–—]\s+(.+)$/) || base.match(/^(.+?)[-–—](.+)$/);
+    if (!$('#f-artist').value.trim() && m) $('#f-artist').value = m[1].trim();
+    if (!$('#f-title').value.trim()) $('#f-title').value = (m ? m[2] : base).trim();
+    setMsg('#f-msg', '');
+  } catch(e){
+    $('#f-file-info').textContent = '';
+    setMsg('#f-msg', 'Не получилось прочитать файл. Нужен mp3 (или m4a/ogg/wav).', 'err');
+  }
+});
+
 $('#f-test').addEventListener('click', () => {
   const f = readForm();
-  if (!f.p){ setMsg('#f-msg', 'Сначала вставь ссылку на YouTube', 'err'); return; }
   if (isNaN(f.start)){ setMsg('#f-msg', 'Время начала пиши так: 0:12', 'err'); return; }
-  if (Player.playing){ Player.stop(); return; }
+  if (Snd.playing){ Snd.stop(); return; }
+  const done = () => { $('#f-test').textContent = '▶ Проверить'; if ($('#f-msg').textContent === 'Играет начало…') setMsg('#f-msg', ''); };
+  if (mode === 'file'){
+    const ed = editingId && library.find(x => x.id === editingId);
+    if (ed && ed.file){ setMsg('#f-msg', 'Играет начало…'); $('#f-test').textContent = '■ Стоп'; Snd.preview(ed, { onStop: done }); return; }
+    if (!fileBuf){ setMsg('#f-msg', 'Сначала выбери файл', 'err'); return; }
+    if (f.start >= fileBuf.duration){ setMsg('#f-msg', 'Время начала дальше конца песни', 'err'); return; }
+    Snd.stop(true);
+    setMsg('#f-msg', 'Играет начало…'); $('#f-test').textContent = '■ Стоп';
+    Clip.playRaw(fileBuf, f.start, PREVIEW_SEC, { onStop: done });
+    return;
+  }
+  if (!f.p){ setMsg('#f-msg', 'Сначала вставь ссылку на YouTube', 'err'); return; }
   setMsg('#f-msg', 'Играет начало…');
   $('#f-test').textContent = '■ Стоп';
-  Player.preview({ id: f.p.id, yt: f.p.id, start: f.start, title: f.title || 'песня' }, {
-    onStop: () => { $('#f-test').textContent = '▶ Проверить'; if ($('#f-msg').textContent === 'Играет начало…') setMsg('#f-msg', ''); }
-  });
+  Snd.preview({ id: f.p.id, yt: f.p.id, start: f.start, title: f.title || 'песня' }, { onStop: done });
 });
-$('#f-save').addEventListener('click', () => {
+
+$('#f-save').addEventListener('click', async () => {
   const f = readForm();
-  if (!f.p) return setMsg('#f-msg', 'Вставь ссылку на YouTube', 'err');
   if (!f.artist) return setMsg('#f-msg', 'Напиши исполнителя', 'err');
   if (!f.title) return setMsg('#f-msg', 'Напиши название песни', 'err');
   if (isNaN(f.start)) return setMsg('#f-msg', 'Время начала пиши так: 0:12', 'err');
+
+  if (mode === 'file'){
+    // редактирование уже готового отрывка — меняются только подписи
+    const ed = editingId && library.find(x => x.id === editingId);
+    if (ed && ed.file){
+      upsertSong(makeSong({ file: ed.file, artist: f.artist, title: f.title }));
+      clearForm(); setMsg('#f-msg', 'Сохранено', 'ok'); renderSongs(); return;
+    }
+    if (!fileBuf) return setMsg('#f-msg', 'Выбери файл с песней', 'err');
+    if (f.start >= fileBuf.duration - 1) return setMsg('#f-msg', 'Время начала дальше конца песни', 'err');
+    const same = library.find(s => norm(s.artist) === norm(f.artist) && norm(s.title) === norm(f.title));
+    if (same) return setMsg('#f-msg', `Такая песня уже есть: ${same.artist} — ${same.title}`, 'err');
+    Snd.stop(true);
+    $('#f-save').disabled = true;
+    setMsg('#f-msg', 'Вырезаю отрывок…');
+    try {
+      const { blob } = await encodeClip(fileBuf, f.start, CLIP_SEC);
+      const path = clipPathFor(f.artist, f.title);
+      await LocalClips.put(path, blob);
+      const song = makeSong({ file: path, artist: f.artist, title: f.title });
+      upsertSong(song);
+      fileStatus.set(path, 'missing');
+      clearForm();
+      showUpload(path, blob);
+      setMsg('#f-msg', `Добавлено: ${song.artist} — ${song.title}`, 'ok');
+      renderSongs();
+    } catch(e){
+      setMsg('#f-msg', e && e.message === 'lame' ? 'Не загрузился кодировщик (lame.min.js) — проверь, что файл есть в репозитории' : 'Не получилось вырезать отрывок', 'err');
+    } finally { $('#f-save').disabled = false; }
+    return;
+  }
+
+  if (!f.p) return setMsg('#f-msg', 'Вставь ссылку на YouTube', 'err');
   const dup = library.find(s => s.id === f.p.id);
   if (dup && dup.id !== editingId) return setMsg('#f-msg', `Эта песня уже есть: ${dup.artist} — ${dup.title}`, 'err');
   if (editingId && editingId !== f.p.id) removeSong(editingId);
@@ -541,10 +784,29 @@ $('#f-save').addEventListener('click', () => {
   setMsg('#f-msg', added ? `Добавлено: ${song.artist} — ${song.title}` : 'Сохранено', 'ok');
   renderSongs();
 });
+
+// после нарезки: скачать отрывок и загрузить его в папку clips на GitHub
+function showUpload(path, blob){
+  const name = path.split('/').pop();
+  const a = $('#up-dl');
+  if (a.dataset.url) URL.revokeObjectURL(a.dataset.url);
+  const url = URL.createObjectURL(blob);
+  a.href = url; a.dataset.url = url; a.download = name;
+  a.textContent = `⬇ Скачать ${name}`;
+  $('#up-size').textContent = `${Math.round(blob.size / 1024)} КБ`;
+  const gh = $('#up-gh');
+  if (GITHUB_UPLOAD_URL){ gh.href = GITHUB_UPLOAD_URL; gh.style.display = ''; } else gh.style.display = 'none';
+  $('#f-upload').style.display = '';
+  try { a.click(); } catch(e){}
+}
+$('#up-close').addEventListener('click', () => { $('#f-upload').style.display = 'none'; });
+
 $('#f-cancel').addEventListener('click', () => { clearForm(); setMsg('#f-msg', ''); });
 function clearForm(){
-  editingId = null; startTouched = false;
+  editingId = null; startTouched = false; fileBuf = null; fileName = '';
   ['#f-url', '#f-artist', '#f-title', '#f-start'].forEach(s => $(s).value = '');
+  $('#f-file').value = ''; $('#f-file').style.display = ''; $('#f-file-info').textContent = '';
+  $('#f-start').disabled = false;
   $('#f-preview').classList.remove('show');
   $('#f-heading').textContent = 'Добавить песню';
   $('#f-save').textContent = 'Добавить';
@@ -552,16 +814,35 @@ function clearForm(){
 }
 function editSong(id){
   const s = library.find(x => x.id === id); if (!s) return;
+  clearForm();
   editingId = id; startTouched = true;
-  $('#f-url').value = `https://youtu.be/${s.yt}`;
+  setMode(s.file ? 'file' : 'yt');
   $('#f-artist').value = s.artist; $('#f-title').value = s.title;
-  $('#f-start').value = s.start ? fmtTime(s.start) : '';
-  $('#f-preview').classList.add('show'); $('#f-thumb').src = thumb(s.yt); $('#f-preview-text').textContent = 'Редактирование';
+  if (s.file){
+    $('#f-file').style.display = 'none';
+    $('#f-file-info').textContent = `Файл: ${s.file}. Чтобы вырезать другой кусок — удали песню и добавь заново.`;
+    $('#f-start').disabled = true;
+  } else {
+    $('#f-url').value = `https://youtu.be/${s.yt}`;
+    $('#f-start').value = s.start ? fmtTime(s.start) : '';
+    $('#f-preview').classList.add('show'); $('#f-thumb').src = thumb(s.yt); $('#f-preview-text').textContent = 'Редактирование';
+  }
   $('#f-heading').textContent = 'Изменить песню';
   $('#f-save').textContent = 'Сохранить';
   $('#f-cancel').style.display = '';
-  setMsg('#f-msg', s.broken ? 'Это видео не играло — вставь другую ссылку' : '', s.broken ? 'err' : '');
+  setMsg('#f-msg', s.broken ? (s.file ? 'Этот отрывок не играл — проверь, загружен ли файл' : 'Это видео не играло — вставь другую ссылку') : '', s.broken ? 'err' : '');
   window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// есть ли файл отрывка на сайте (то есть загружен ли он на GitHub)
+const fileStatus = new Map();
+function checkFile(path){
+  if (fileStatus.has(path)) return;
+  fileStatus.set(path, 'checking');
+  fetch(path, { method: 'HEAD', cache: 'no-cache' })
+    .then(r => fileStatus.set(path, r.ok ? 'ok' : 'missing'))
+    .catch(() => fileStatus.set(path, 'missing'))
+    .finally(() => { if ($('#screen-songs').classList.contains('active')) renderSongs(); });
 }
 function savedState(){
   // что уже лежит в songs.json, а что есть только в этом браузере
@@ -578,7 +859,7 @@ function savedState(){
 function exportJson(){
   const rows = library
     .slice().sort((a, b) => a.artist.localeCompare(b.artist, 'ru') || a.title.localeCompare(b.title, 'ru'))
-    .map(({ yt, artist, title, start }) => '  ' + JSON.stringify({ yt, artist, title, start }));
+    .map(s => '  ' + JSON.stringify(s.file ? { file: s.file, artist: s.artist, title: s.title } : { yt: s.yt, artist: s.artist, title: s.title, start: s.start }));
   return '[\n' + rows.join(',\n') + '\n]\n';
 }
 function renderSongs(){
@@ -588,10 +869,12 @@ function renderSongs(){
     .filter(s => !q || norm(s.artist + ' ' + s.title).includes(q))
     .sort((a, b) => a.artist.localeCompare(b.artist, 'ru') || a.title.localeCompare(b.title, 'ru'));
   $('#list-title').textContent = `Список песен (${library.length})`;
+  library.forEach(s => { if (s.file) checkFile(s.file); });
   $('#song-list').innerHTML = list.length ? list.map(s => `
     <div class="song ${s.broken ? 'broken' : ''}" data-id="${esc(s.id)}">
-      <img src="${thumb(s.yt)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">
-      <div class="t"><div><b>${esc(s.title)}</b>${st.unsaved.has(s.id) ? ' <span class="badge">не сохранена</span>' : ''}</div><div class="a">${esc(s.artist)}${s.start ? ' · с ' + fmtTime(s.start) : ''}</div></div>
+      ${s.yt ? `<img src="${thumb(s.yt)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">` : '<div class="ph">♪</div>'}
+      <div class="t"><div><b>${esc(s.title)}</b></div><div class="a">${esc(s.artist)}${s.file ? ' · mp3' : ''}${s.start ? ' · с ' + fmtTime(s.start) : ''}</div>${st.unsaved.has(s.id) || (s.file && fileStatus.get(s.file) === 'missing') ? `<div class="badges">${st.unsaved.has(s.id) ? '<span class="badge">не сохранена</span>' : ''}${s.file && fileStatus.get(s.file) === 'missing' ? '<span class="badge bad">нет на GitHub</span>' : ''}</div>` : ''}</div>
+      ${s.file && fileStatus.get(s.file) === 'missing' ? '<button class="icon-btn" data-act="dl" title="Скачать отрывок ещё раз">⬇</button>' : ''}
       <button class="icon-btn" data-act="play" title="Проверить">▶</button>
       <button class="icon-btn" data-act="edit" title="Изменить">✎</button>
       <button class="icon-btn btn-danger" data-act="del" title="Удалить">✕</button>
@@ -604,8 +887,10 @@ function renderSongs(){
     if (st.unsaved.size) parts.push(`новых или изменённых: ${st.unsaved.size}`);
     if (st.removed) parts.push(`удалённых: ${st.removed}`);
     n.innerHTML = `Игроки пока не видят изменения (${parts.join(', ')}). Открой «Сохранить для всех игроков» внизу.`;
-    n.style.display = '';
-  } else n.style.display = 'none';
+  }
+  const missing = library.filter(s => s.file && fileStatus.get(s.file) === 'missing').length;
+  if (missing) n.innerHTML += `${st.dirty ? '<br>' : ''}Отрывков не загружено в папку <code>clips</code> на GitHub: ${missing}. Нажми ⬇ у песни, скачай файл и загрузи его в <code>clips</code>.`;
+  n.style.display = st.dirty || missing ? '' : 'none';
   const gh = $('#gh-link');
   if (GITHUB_EDIT_URL){ gh.href = GITHUB_EDIT_URL; gh.style.display = ''; } else gh.style.display = 'none';
 }
@@ -615,14 +900,18 @@ $('#song-list').addEventListener('click', e => {
   const b = e.target.closest('button[data-act]'); if (!b) return;
   const id = b.closest('.song').dataset.id;
   const s = library.find(x => x.id === id); if (!s) return;
+  if (b.dataset.act === 'dl'){
+    LocalClips.get(s.file).then(blob => { if (blob) showUpload(s.file, blob); else toast('Этого отрывка нет в этом браузере — удали песню и добавь файл заново'); });
+    return;
+  }
   if (b.dataset.act === 'play'){
-    if (Player.playing){ Player.stop(); return; }
+    if (Snd.playing){ Snd.stop(); return; }
     b.textContent = '■';
-    Player.preview(s, { onStop: () => { b.textContent = '▶'; } });
+    Snd.preview(s, { onStop: () => { b.textContent = '▶'; } });
   } else if (b.dataset.act === 'edit') editSong(id);
   else if (b.dataset.act === 'del'){
     if (delArmed !== id){ delArmed = id; b.textContent = '?'; toast('Нажми ✕ ещё раз, чтобы удалить'); setTimeout(() => { if (delArmed === id){ delArmed = null; b.textContent = '✕'; } }, 3000); return; }
-    delArmed = null; removeSong(id); if (editingId === id) clearForm(); renderSongs(); toast('Удалено');
+    delArmed = null; removeSong(id); if (s.file) LocalClips.del(s.file); if (editingId === id) clearForm(); renderSongs(); toast('Удалено');
   }
 });
 $('#bulk-add').addEventListener('click', () => {
@@ -658,8 +947,9 @@ async function boot(){
     b.innerHTML = '<b>Не загрузился список песен (songs.json).</b> Сайт нужно открывать по ссылке GitHub Pages (ник.github.io/irlar), а не двойным кликом по файлу. Если ссылка правильная — проверь, что в songs.json нет ошибки (лишней запятой или кавычки).';
     b.classList.add('show');
   }
-  loadLibrary();
   applyAdmin();
+  loadLibrary();
+  booted = true;
   renderHome();
 }
 Player.init();
