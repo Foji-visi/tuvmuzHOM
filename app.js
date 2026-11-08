@@ -17,8 +17,8 @@ const GITHUB_EDIT_URL = (() => {
 })();
 
 /* ====== НАСТРОЙКИ ИГРЫ ====== */
-const STEPS = [0.5, 1, 2, 4, 8];          // длина отрывка на каждой попытке, сек
-const POINTS = [1000, 800, 600, 400, 200]; // очки за угадывание с 1-й…5-й попытки
+const STEPS = [0.5, 1, 2, 4, 8, 15];            // длина отрывка на каждой попытке, сек
+const POINTS = [1000, 850, 700, 550, 400, 250]; // очки за угадывание с 1-й…6-й попытки
 const ROUND_SIZE = 5;                       // песен за игру
 const REVEAL_SEC = 15;                      // сколько играет после ответа
 const PREVIEW_SEC = 3;                      // проверка на экране «Песни»
@@ -277,6 +277,8 @@ $('#ladder').innerHTML = STEPS.map(s => `<span>${fmtSec(s)}</span>`).join('<span
 /* ====== ИГРА ====== */
 let G = null;
 const MAXLEN = STEPS[STEPS.length - 1];
+// шкала «сжатая» (корень), чтобы короткие отрезки 0,5 и 1 с были видны рядом с 15 с
+const pos = t => Math.sqrt(Math.max(0, t) / MAXLEN) * 100;
 
 function startGame(){
   const pool = library.filter(s => !s.broken);
@@ -329,12 +331,12 @@ function renderGame(){
 
   // шкала
   const unlocked = c.done ? MAXLEN : STEPS[c.step];
-  $('#g-unlocked').style.width = (unlocked / MAXLEN * 100) + '%';
+  $('#g-unlocked').style.width = pos(unlocked) + '%';
   $('#g-prog').style.width = '0';
   const tl = $('#g-timeline');
   tl.querySelectorAll('.tick').forEach(t => t.remove());
-  STEPS.slice(0, -1).forEach(s => { const d = document.createElement('div'); d.className = 'tick'; d.style.left = `calc(${s / MAXLEN * 100}% - 1px)`; tl.appendChild(d); });
-  $('#g-ticks').innerHTML = STEPS.map(s => `<span style="left:${Math.min(97, Math.max(3, s / MAXLEN * 100))}%">${String(s).replace('.', ',')}</span>`).join('');
+  STEPS.slice(0, -1).forEach(s => { const d = document.createElement('div'); d.className = 'tick'; d.style.left = `calc(${pos(s)}% - 1px)`; tl.appendChild(d); });
+  $('#g-ticks').innerHTML = STEPS.map(s => `<span style="left:${Math.min(97, Math.max(3, pos(s)))}%">${String(s).replace('.', ',')}</span>`).join('');
 
   const nextStep = STEPS[c.guesses.length + 1];
   $('#g-skip').textContent = nextStep ? `Пропуск +${fmtSec(nextStep - STEPS[c.step])}` : 'Сдаться';
@@ -363,7 +365,7 @@ $('#g-playbtn').addEventListener('click', () => {
   if (Player.playing){ Player.stop(); return; }
   setPlaying(true);
   Player.play(STEPS[c.step], {
-    onTick: t => { $('#g-prog').style.width = (t / MAXLEN * 100) + '%'; },
+    onTick: t => { $('#g-prog').style.width = pos(t) + '%'; },
     onStop: () => { setPlaying(false); renderPlayLabel(); }
   });
   $('#g-playlabel').textContent = 'Играет…';
