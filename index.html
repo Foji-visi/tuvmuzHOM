@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ырылар — угадай тувинскую песню</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rubik:ital,wght@0,400;0,500;0,600;0,700;0,800;1,800;1,900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="on-home">
+
+<!-- мотив флага Тувы (пропорции 1:2): синее поле, белая «вилка» с синей линией внутри, жёлтый треугольник -->
+<svg class="flag-motif" viewBox="0 0 600 300" aria-hidden="true">
+  <defs><clipPath id="flagClip"><rect width="600" height="300" rx="10"/></clipPath></defs>
+  <g clip-path="url(#flagClip)">
+    <rect width="600" height="300" fill="#2f7bff"/>
+    <path d="M0 36 L175 150 L0 264 Z" fill="#ffc629"/>
+    <path d="M0 0 L230 150 L0 300 M230 150 L600 150" fill="none" stroke="#fff" stroke-width="60" stroke-linejoin="miter" stroke-miterlimit="10"/>
+    <path d="M0 0 L230 150 L0 300 M230 150 L600 150" fill="none" stroke="#2f7bff" stroke-width="20" stroke-linejoin="miter" stroke-miterlimit="10"/>
+  </g>
+</svg>
+
+<div class="wrap">
+  <header class="top">
+    <div class="top-left">
+      <button class="back-arrow" id="backArrow" aria-label="Назад">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg>
+      </button>
+      <button class="logo italic" data-go="home" aria-label="На главную">
+        <svg viewBox="0 0 32 32" fill="none" aria-hidden="true">
+          <circle cx="16" cy="11" r="5" fill="#f4b942"/>
+          <path d="M2 27 L11 15 L16 21 L21 14 L30 27 Z" fill="#5ad1c5" opacity=".9"/>
+          <path d="M2 27 L11 15 L14 19" stroke="#060b1a" stroke-width="1.4"/>
+        </svg>
+        <b>ЫРЫ<span>ЛАР</span></b>
+      </button>
+    </div>
+    <button class="nav-btn admin-only" data-go="songs" id="btn-songs">Песни</button>
+  </header>
+
+  <div class="banner" id="yt-banner"></div>
+
+  <!-- ===================== ГЛАВНАЯ ===================== -->
+  <section class="screen active" id="screen-home">
+    <div class="hello"><h1>Угадай тувинскую песню по первым секундам</h1></div>
+    <nav class="menu" id="menu">
+      <button class="mi sel" data-go="daily">
+        <span class="slash">/</span>
+        <span class="italic name">Песня дня<span class="sub" id="mi-daily-sub">5 песен для всех · новые каждый день</span></span>
+      </button>
+      <button class="mi" data-go="solo">
+        <span class="slash">/</span>
+        <span class="italic name">Соло<span class="sub">Рандом и артисты — играй сколько хочешь</span></span>
+      </button>
+      <button class="mi" data-go="duo">
+        <span class="slash">/</span>
+        <span class="italic name">Дуо<span class="sub">Против друга по ссылке на комнату</span></span>
+        <span class="tag">СКОРО</span>
+      </button>
+    </nav>
+    <div class="stats-row">
+      <div class="stat"><b id="st-count">0</b><span>песен</span></div>
+      <div class="stat"><b id="st-artists">0</b><span>артистов</span></div>
+      <div class="stat"><b id="st-best">—</b><span>рекорд</span></div>
+    </div>
+  </section>
+
+  <!-- ===================== ПЕСНЯ ДНЯ ===================== -->
+  <section class="screen" id="screen-daily">
+    <h2 class="italic h-screen">Песня <span class="gold">дня</span></h2>
+    <p class="lead">Новые песни каждый день в 00:00.</p>
+    <div class="mode-card static">
+      <div class="big" id="daily-big">№1</div>
+      <h3 class="italic" id="daily-title">Выпуск №1</h3>
+      <p id="daily-text">5 песен — одинаковые у всех сегодня</p>
+      <div class="daily-done" id="daily-done" style="display:none"></div>
+    </div>
+    <div class="countdown" id="daily-cd" style="display:none"><span>НОВЫЕ ПЕСНИ ДНЯ ЧЕРЕЗ</span><b class="cd-long">--:--:--</b></div>
+    <button class="btn btn-primary" id="daily-play" style="margin-top:14px">▶ Играть</button>
+    <button class="btn btn-ghost admin-only" id="daily-replay" style="margin-top:10px;display:none">Сыграть ещё раз (режим автора)</button>
+  </section>
+
+  <!-- ===================== СОЛО ===================== -->
+  <section class="screen" id="screen-solo">
+    <h2 class="italic h-screen">Соло</h2>
+    <p class="lead">Выбери, во что играть. Выйти из игры можно в любой момент — вернёшься сюда.</p>
+    <div class="cards">
+      <button class="mode-card" id="solo-random">
+        <div class="big">?</div>
+        <h3 class="italic">Рандом</h3>
+        <p>5 случайных песен от разных исполнителей. Можно играть сколько угодно.</p>
+        <div class="meta"><span class="chip l">5 песен</span><span class="chip">без ограничений</span></div>
+      </button>
+      <button class="mode-card" data-go="artists">
+        <div class="big">★</div>
+        <h3 class="italic">Артисты</h3>
+        <p>Выбери артиста — получишь 10 случайных песен из всех его треков.</p>
+        <div class="meta"><span class="chip l">10 песен</span><span class="chip" id="solo-artists-count">0 артистов</span></div>
+      </button>
+    </div>
+  </section>
+
+  <!-- ===================== АРТИСТЫ ===================== -->
+  <section class="screen" id="screen-artists">
+    <h2 class="italic h-screen">Артисты</h2>
+    <div class="artists-layout">
+      <div class="artists-frame">
+        <div class="frame-head">
+          <input class="search" id="art-search" placeholder="Найти артиста…" autocomplete="off">
+          <span class="frame-count" id="art-count"></span>
+        </div>
+        <div class="artists" id="artist-grid"></div>
+      </div>
+      <aside class="side-zone">
+        <div>
+          <div class="italic" style="font-size:20px;color:var(--muted)">Свободная зона</div>
+          <div class="small-note">Здесь потом что-нибудь появится:<br>например, «Артист недели» или новые песни</div>
+        </div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ===================== СТРАНИЦА АРТИСТА ===================== -->
+  <section class="screen" id="screen-artist">
+    <div class="artist-hero">
+      <div class="ava" id="a-ava"></div>
+      <div><h2 class="italic" id="a-name"></h2><div class="muted" id="a-count"></div></div>
+    </div>
+    <p class="lead" id="a-lead">В игре будет 10 случайных песен из всех треков артиста. Каждый раз — новая десятка.</p>
+    <div class="tracklist" id="a-tracks"></div>
+    <button class="btn btn-primary" id="a-play">▶ Играть</button>
+  </section>
+
+  <!-- ===================== ДУО ===================== -->
+  <section class="screen" id="screen-duo">
+    <h2 class="italic h-screen">Дуо</h2>
+    <p class="lead">Создай комнату и отправь ссылку другу. Вы слушаете одни и те же отрывки — кто угадает быстрее и с меньшего числа попыток, тот и выиграл.</p>
+    <div class="soon-box">
+      <div class="italic gold" style="font-size:26px">Скоро</div>
+      <p>Для игры вдвоём нужна серверная часть, чтобы два телефона видели ходы друг друга. Режим появится в одном из следующих обновлений.</p>
+    </div>
+    <button class="btn btn-primary" disabled>+ Создать комнату</button>
+    <div class="or">— ИЛИ —</div>
+    <input class="search code-in" maxlength="4" placeholder="КОД" disabled>
+    <button class="btn btn-ghost" disabled>Войти по коду</button>
+  </section>
+
+  <!-- ===================== ИГРА ===================== -->
+  <section class="screen" id="screen-game">
+    <div class="g-head">
+      <div style="min-width:0">
+        <div class="italic g-mode" id="g-mode">Рандом</div>
+        <div class="g-sub" id="g-counter">Песня 1 из 5</div>
+        <div class="dots" id="g-dots"></div>
+      </div>
+      <div class="g-right">
+        <div class="italic score" id="g-score">0</div>
+        <button class="exit" id="g-exit">✕ Выйти</button>
+      </div>
+    </div>
+
+    <div class="atts" id="g-attempts"></div>
+
+    <div id="g-play-area">
+      <div class="tl" id="g-timeline"><div class="u" id="g-unlocked"></div><div class="p" id="g-prog"></div></div>
+      <div class="ticks" id="g-ticks"></div>
+      <div class="playwrap">
+        <button class="play" id="g-playbtn" aria-label="Слушать">
+          <svg id="ico-play" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z"/></svg>
+          <svg id="ico-stop" viewBox="0 0 24 24" fill="currentColor" style="display:none"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
+        </button>
+        <div class="play-label" id="g-playlabel">Слушать 0,5 с</div>
+      </div>
+      <div class="guess-box">
+        <div class="sugg" id="g-sugg"></div>
+        <input class="guess" id="g-input" placeholder="Название или исполнитель…" autocomplete="off" autocorrect="off" spellcheck="false">
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="btn btn-ghost" id="g-skip">Пропуск</button>
+        <button class="btn btn-primary" id="g-answer" disabled>Ответить</button>
+      </div>
+    </div>
+
+    <div class="reveal" id="g-reveal" style="display:none">
+      <div class="cv" id="r-cover"></div>
+      <h2 class="italic" id="r-title"></h2>
+      <div class="muted" id="r-artist"></div>
+      <div class="verdict" id="r-verdict"></div>
+      <div class="row">
+        <button class="btn btn-ghost" id="r-listen">▶ Послушать</button>
+        <button class="btn btn-primary" id="r-next">Дальше →</button>
+      </div>
+      <div style="margin-top:12px"><a id="r-link" href="#" target="_blank" rel="noopener" class="small">Открыть на YouTube</a></div>
+    </div>
+  </section>
+
+  <!-- ===================== ИТОГИ ===================== -->
+  <section class="screen" id="screen-result">
+    <div class="total"><span class="muted" id="res-label">Твой счёт</span><b id="res-total">0</b><span class="muted" id="res-best"></span></div>
+    <div class="countdown" id="res-cd" style="display:none"><span>НОВЫЕ ПЕСНИ ДНЯ ЧЕРЕЗ</span><b class="cd-long">--:--:--</b></div>
+    <div class="res" id="res-list"></div>
+    <div class="row">
+      <button class="btn btn-primary" id="res-again">Ещё раз</button>
+      <button class="btn btn-ghost" id="res-share">Поделиться</button>
+    </div>
+    <textarea class="share-fallback" id="res-share-text" readonly></textarea>
+    <button class="btn btn-ghost" id="res-back" style="margin-top:10px">К режимам</button>
+  </section>
+
+  <!-- ПЕСНИ -->
+  <section class="screen" id="screen-songs">
+    <div class="small muted" style="margin:0 0 10px">Режим автора: этот экран видишь только ты. <a href="#player">Выйти из режима автора</a></div>
+    <div class="card">
+      <h3 style="font-size:17px;margin-bottom:14px" id="f-heading">Добавить песню</h3>
+      <div class="seg" id="f-mode">
+        <button data-mode="yt" class="on">Ссылка YouTube</button>
+        <button data-mode="file">Файл mp3</button>
+      </div>
+      <div id="f-yt-fields">
+        <div class="field">
+          <label for="f-url">Ссылка на YouTube</label>
+          <input id="f-url" placeholder="https://youtu.be/…" inputmode="url">
+        </div>
+        <div class="url-preview" id="f-preview"><img id="f-thumb" alt=""><span id="f-preview-text"></span></div>
+      </div>
+      <div id="f-file-fields" style="display:none">
+        <div class="field">
+          <label for="f-file">Файл с песней (из ВК, Telegram, откуда угодно)</label>
+          <input type="file" id="f-file" accept="audio/*,.mp3,.m4a,.ogg,.wav" class="file-input">
+          <div class="small muted" id="f-file-info"></div>
+        </div>
+        <p class="small muted" style="margin:-4px 0 12px">Совет: назови файл «Исполнитель - Название.mp3», тогда поля ниже заполнятся сами.</p>
+      </div>
+      <div class="row">
+        <div class="field grow"><label for="f-artist">Исполнитель</label><input id="f-artist" placeholder="Кто поёт"></div>
+      </div>
+      <div class="field"><label for="f-title">Название песни</label><input id="f-title" placeholder="Как называется"></div>
+      <div class="field">
+        <label for="f-start" id="f-start-label">С какого места начинать (если в начале видео заставка или тишина)</label>
+        <input id="f-start" placeholder="0:00" inputmode="numeric" style="max-width:140px">
+      </div>
+      <div class="form-msg" id="f-msg"></div>
+      <div class="row">
+        <button class="btn btn-ghost" id="f-test">▶ Проверить</button>
+        <button class="btn btn-primary grow" id="f-save">Добавить</button>
+      </div>
+      <button class="btn btn-ghost" id="f-cancel" style="display:none;margin-top:10px;width:100%">Отменить редактирование</button>
+
+      <div class="upload-box" id="f-upload" style="display:none">
+        <b>Отрывок готов (<span id="up-size"></span>). Осталось загрузить его на GitHub:</b>
+        <ol>
+          <li>Скачай файл (обычно скачивается сам): <a class="btn btn-ghost btn-sm" id="up-dl" href="#">⬇ Скачать</a></li>
+          <li>Открой папку <code>clips</code> в репозитории: <a class="btn btn-ghost btn-sm" id="up-gh" href="#" target="_blank" rel="noopener">Открыть на GitHub ↗</a></li>
+          <li>Перетащи туда скачанный файл → <b>Commit changes</b>.</li>
+          <li>Потом сохрани список песен, как обычно («Сохранить для всех игроков» внизу).</li>
+        </ol>
+        <button class="btn btn-ghost btn-sm" id="up-close">Понятно</button>
+      </div>
+    </div>
+
+    <div class="save-notice" id="save-notice" style="display:none"></div>
+    <div class="section-title"><h3 id="list-title">Список песен</h3><input id="list-search" placeholder="Поиск" style="width:150px;padding:8px 10px;border-radius:10px;border:1px solid var(--line);background:#0e1430;outline:none;font-size:14px"></div>
+    <div class="song-list" id="song-list"></div>
+
+    <details class="card" style="margin-top:16px">
+      <summary>Добавить много песен сразу</summary>
+      <p class="small muted">По одной песне на строку: <code>ссылка ; исполнитель ; название ; начало</code>. Начало можно не писать.</p>
+      <div class="field"><textarea id="bulk-text" placeholder="https://youtu.be/xxxxxxxxxxx ; Исполнитель ; Название ; 0:05"></textarea></div>
+      <button class="btn btn-ghost" id="bulk-add">Добавить из текста</button>
+      <div class="form-msg" id="bulk-msg" style="margin-top:10px"></div>
+    </details>
+
+    <details class="card" style="margin-top:12px" id="save-box">
+      <summary>Сохранить для всех игроков</summary>
+      <p class="small muted">Песни, добавленные здесь, видишь только ты. Чтобы они появились у всех:</p>
+      <ol class="small muted" style="padding-left:18px;line-height:1.6">
+        <li>Нажми «Скопировать».</li>
+        <li>Открой файл <code>songs.json</code> в своём репозитории на GitHub (кнопка ниже) и нажми карандаш ✎ (Edit), если редактор не открылся сам.</li>
+        <li>Выдели всё старое (Ctrl+A), вставь скопированное (Ctrl+V).</li>
+        <li>Нажми <b>Commit changes</b>. Через 1–2 минуты сайт обновится сам.</li>
+      </ol>
+      <div class="field"><textarea id="export-text" readonly></textarea></div>
+      <div class="row" style="flex-wrap:wrap">
+        <button class="btn btn-ghost" id="export-copy">Скопировать</button>
+        <a class="btn btn-ghost" id="gh-link" href="#" target="_blank" rel="noopener" style="display:none;text-decoration:none">Открыть songs.json на GitHub ↗</a>
+      </div>
+    </details>
+  </section>
+</div>
+
+<div class="modal" id="exit-modal">
+  <div class="box">
+    <h3 class="italic">Выйти?</h3>
+    <p>Прогресс этой игры не сохранится.</p>
+    <div class="row"><button class="btn btn-ghost" id="exit-stay">Остаться</button><button class="btn btn-primary" id="exit-go">Выйти</button></div>
+  </div>
+</div>
+<div id="yt-wrap"><div id="yt"></div></div>
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
