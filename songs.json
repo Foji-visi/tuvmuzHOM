@@ -1,5 +1,8 @@
 [
+  {"file":"clips/song-en-ne-charash-sen.mp3","artist":"?","title":"Эн-не чараш сен"},
   {"file":"clips/dorzhu-belek-kara-kara-karaktar.mp3","artist":"Доржу-Белек","title":"Кара кара карактар"},
   {"file":"clips/sayen-shydavasnyu.mp3","artist":"Сайен","title":"Шыдаваснью"},
-  {"file":"clips/enamor-tanyzhyp-aalam.mp3","artist":"Enamor","title":"Таныжып аалам"}
+  {"file":"clips/enamor-tanyzhyp-aalam.mp3","artist":"Enamor","title":"Таныжып аалам"},
+  {"file":"clips/oynarov-egittinmes-ue.mp3","artist":"OYNAROV","title":"Эгиттинмес уе"},
+  {"file":"clips/sayynool-chugle-sen.mp3","artist":"Sayynool","title":"Чугле сен"}
 ]
