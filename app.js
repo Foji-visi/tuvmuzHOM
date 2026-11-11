@@ -8,12 +8,15 @@ let BUILTIN_SONGS = [];
    На GitHub Pages (ник.github.io/репозиторий) определяется сама.
    Если сайт живёт по другому адресу — впиши вручную:
    'https://github.com/ТВОЙ-НИК/tuvmuzHOM/edit/main/songs.json'  */
+const GITHUB_REPO = 'Foji-visi/tuvmuzHOM';   // репозиторий с songs.json (на случай, если сайт открыт не с github.io)
 const GITHUB_EDIT_URL = (() => {
   const h = location.hostname;
-  if (!h.endsWith('.github.io')) return '';
-  const owner = h.replace('.github.io', '');
-  const repo = location.pathname.split('/').filter(Boolean)[0] || h;
-  return `https://github.com/${owner}/${repo}/edit/main/songs.json`;
+  if (h.endsWith('.github.io')){
+    const owner = h.replace('.github.io', '');
+    const repo = location.pathname.split('/').filter(Boolean)[0] || h;
+    return `https://github.com/${owner}/${repo}/edit/main/songs.json`;
+  }
+  return GITHUB_REPO ? `https://github.com/${GITHUB_REPO}/edit/main/songs.json` : '';
 })();
 
 /* ====== НАСТРОЙКИ ИГРЫ ====== */
@@ -133,7 +136,10 @@ const Player = {
   stopTimer: 0, warmTimer: 0, raf: 0, onTick: null, onStop: null, onWarm: null,
   onErr: null,
 
+  started: false, failed: false,
   init(){
+    if (this.started) return;
+    this.started = true;
     window.onYouTubeIframeAPIReady = () => {
       this.yt = new YT.Player('yt', {
         width: 240, height: 135,
@@ -147,14 +153,33 @@ const Player = {
     };
     const s = document.createElement('script');
     s.src = 'https://www.youtube.com/iframe_api';
-    s.onerror = () => showYtProblem('load');
+    s.onerror = () => this._fail();
     document.head.appendChild(s);
-    this.failTimer = setTimeout(() => { if (!this.ready) showYtProblem('load'); }, 12000);
+    this.failTimer = setTimeout(() => { if (!this.ready) this._fail(); }, 8000);
   },
-  whenReady(f){ this.ready ? f() : this.queue.push(f); },
+  // YouTube не загрузился (в России он заблокирован без VPN)
+  _fail(){
+    if (this.failed || this.ready) return;
+    this.failed = true; this.queue = []; clearTimeout(this.failTimer);
+    onYtFailed();
+  },
+  whenReady(f){
+    if (this.ready) return f();
+    if (this.failed) return;
+    this.queue.push(f);
+  },
+  // песня с YouTube, а YouTube недоступен — сразу сообщаем, чтобы игра взяла другую
+  _blocked(song){
+    if (!this.failed) return false;
+    this.current = song;
+    setTimeout(() => Snd.onErr && Snd.onErr(999, song), 0);
+    return true;
+  },
 
   // загрузить песню и заранее прогрузить начало (без звука)
   load(song, onWarm){
+    this.init();
+    if (this._blocked(song)) return;
     this.whenReady(() => {
       this.stop(true);
       this.current = song; this.warming = true; this.onWarm = onWarm || null;
@@ -195,6 +220,8 @@ const Player = {
 
   // проверка песни на экране «Песни»
   preview(song, { onStop } = {}){
+    this.init();
+    if (this.failed){ onStop && setTimeout(onStop, 0); setTimeout(() => Snd.onErr && Snd.onErr(999, song), 0); return; }
     this.whenReady(() => {
       this.stop(true);
       this.current = song; this.warming = false;
@@ -247,7 +274,7 @@ const Player = {
     this.warming = false; clearTimeout(this.warmTimer);
     const wasPlaying = this.playing; this.playing = false; clearTimeout(this.stopTimer); cancelAnimationFrame(this.raf);
     const f = this.onStop; this.onStop = null; if (wasPlaying && f) f();
-    if (code === 153) showYtProblem('referrer');
+    if (code === 153){ this.ready = false; this.failed = true; onYtFailed(); return; }
     this.onErr && this.onErr(code, song);
   }
 };
@@ -347,7 +374,7 @@ const Clip = {
 // Общий пульт: сам выбирает YouTube или свой отрывок
 const Snd = {
   eng: Player, onErr: null,
-  pick(song){ const e = song && song.file ? Clip : Player; if (e !== this.eng){ this.eng.stop(true); this.eng = e; } return e; },
+  pick(song){ const e = song && song.file ? Clip : Player; if (e === Player) Player.init(); if (e !== this.eng){ this.eng.stop(true); this.eng = e; } return e; },
   load(song, onWarm){ this.pick(song).load(song, onWarm); },
   preview(song, opts){ this.pick(song).preview(song, opts); },
   play(dur, opts){ this.eng.play(dur, opts); },
@@ -402,17 +429,26 @@ function clipPathFor(artist, title){
 }
 const GITHUB_UPLOAD_URL = GITHUB_EDIT_URL ? GITHUB_EDIT_URL.replace(/\/edit\/main\/songs\.json$/, '/upload/main/clips') : '';
 
-function showYtProblem(kind){
+const ytSongs = () => library.filter(s => s.yt);
+const ytBlocked = s => !!(s && s.yt && Player.failed);
+// что делать, если YouTube недоступен: песни с YouTube тихо пропускаются, играют только mp3
+function onYtFailed(){
+  const n = ytSongs().length;
   const b = $('#yt-banner');
-  b.innerHTML = kind === 'referrer'
-    ? '<b>YouTube не даёт играть видео.</b> Скорее всего, сайт открыт двойным кликом по файлу. Открой его по ссылке GitHub Pages (вида ник.github.io/tuvmuzHOM) — тогда всё заработает.'
-    : '<b>Не получилось загрузить YouTube.</b> Проверь интернет. Если сайт открыт двойным кликом по файлу — открой его по ссылке GitHub Pages (ник.github.io/tuvmuzHOM).';
-  b.classList.add('show');
+  if (isAdmin() && n){
+    b.innerHTML = `<b>YouTube недоступен</b> (в России без VPN он заблокирован). ${plural(n, 'песня', 'песни', 'песен')} с YouTube в игре пропускаются — лучше заменить их на mp3.`;
+    b.classList.add('show');
+  } else if (n && !library.some(s => s.file)){
+    b.innerHTML = '<b>Песни не загрузились.</b> Сейчас в игре только песни с YouTube, а он не работает без VPN.';
+    b.classList.add('show');
+  }
+  if (G && G.cur && !G.cur.done && G.cur.song.yt) Snd.onErr(999, G.cur.song);
+  if (curScreen === 'songs') renderSongs();
 }
 const ytErrorText = c => ({
   2: 'неправильная ссылка', 5: 'ошибка плеера', 100: 'видео удалено или скрыто',
   101: 'автор запретил встраивать видео', 150: 'автор запретил встраивать видео', 153: 'YouTube не принимает этот сайт',
-  404: 'файл не найден — загружен ли он в clips/?', 415: 'файл повреждён или не аудио'
+  404: 'файл не найден — загружен ли он в clips/?', 415: 'файл повреждён или не аудио', 999: 'YouTube недоступен без VPN'
 }[c] || 'не играет');
 
 /* ====== НАВИГАЦИЯ ====== */
@@ -464,7 +500,7 @@ function pickDistinct(pool, n){
   return out;
 }
 function dailySongs(){
-  const pool = library.slice().sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+  const pool = library.filter(s => !ytBlocked(s)).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
   const rnd = seeded(dayNumber() * 7919);
   for (let i = pool.length - 1; i > 0; i--){ const j = Math.floor(rnd() * (i + 1)); [pool[i], pool[j]] = [pool[j], pool[i]]; }
   return pickDistinct(pool, ROUND_SIZE);
@@ -564,11 +600,11 @@ const MAXLEN = STEPS[STEPS.length - 1];
 const pos = t => Math.sqrt(Math.max(0, t) / MAXLEN) * 100;
 
 function startGame(mode){
-  const pool = library.filter(s => !s.broken);
-  if (!pool.length){ toast(isAdmin() ? 'Сначала добавь песни' : 'Песни скоро появятся'); return; }
+  const pool = library.filter(s => !s.broken && !ytBlocked(s));
+  if (!pool.length){ toast(!library.length ? (isAdmin() ? 'Сначала добавь песни' : 'Песни скоро появятся') : 'Сейчас нет песен, которые работают без VPN'); return; }
   let songs;
   if (mode === 'daily') songs = dailySongs();
-  else if (mode === 'artist'){ if (!curArtist) return show('artists'); songs = shuffle(curArtist.songs.filter(s => !s.broken)).slice(0, ARTIST_ROUND); }
+  else if (mode === 'artist'){ if (!curArtist) return show('artists'); songs = shuffle(curArtist.songs.filter(s => !s.broken && !ytBlocked(s))).slice(0, ARTIST_ROUND); }
   else songs = pickDistinct(shuffle(pool.slice()), ROUND_SIZE);
   if (!songs.length){ toast('Нет песен для игры'); return; }
   G = { mode, songs, i: 0, results: [], score: 0 };
@@ -584,13 +620,12 @@ function startSong(){
   Snd.load(song, () => { if (G && G.cur && G.cur.song === song){ G.cur.warm = true; renderPlayLabel(); } });
 }
 Snd.onErr = (code, song) => {
-  if (song){ const s = library.find(x => x.id === song.id); if (s && code !== 153) s.broken = true; }
+  if (song && code !== 999){ const s = library.find(x => x.id === song.id); if (s) s.broken = true; }
   if (!G || !G.cur || !song || G.cur.song.id !== song.id || G.cur.done) { if ($('#screen-songs').classList.contains('active')){ setMsg('#f-msg', 'Не играет: ' + ytErrorText(code), 'err'); renderSongs(); } return; }
-  if (code === 153) return;
-  toast(`«${song.title}» не играет (${ytErrorText(code)}) — беру другую`);
+  if (isAdmin()) toast(`«${song.title}» не играет (${ytErrorText(code)}) — беру другую`);
   const used = new Set(G.songs.map(s => s.id));
   const from = G.mode === 'artist' && curArtist ? curArtist.songs : library;
-  const repl = shuffle(from.filter(s => !s.broken && !used.has(s.id)))[0];
+  const repl = shuffle(from.filter(s => !s.broken && !ytBlocked(s) && !used.has(s.id)))[0];
   if (repl){ G.songs[G.i] = repl; startSong(); }
   else {
     G.songs.splice(G.i, 1);
@@ -1015,9 +1050,9 @@ function renderSongs(){
   $('#list-title').textContent = `Список песен (${library.length})`;
   library.forEach(s => { if (s.file) checkFile(s.file); });
   $('#song-list').innerHTML = list.length ? list.map(s => `
-    <div class="song ${s.broken ? 'broken' : ''}" data-id="${esc(s.id)}">
+    <div class="song ${s.broken && !ytBlocked(s) ? 'broken' : ''}" data-id="${esc(s.id)}">
       ${s.yt ? `<img src="${thumb(s.yt)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">` : '<div class="ph">♪</div>'}
-      <div class="t"><div><b>${esc(s.title)}</b></div><div class="a">${esc(s.artist)}${s.file ? ' · mp3' : ''}${s.start ? ' · с ' + fmtTime(s.start) : ''}</div>${st.unsaved.has(s.id) || (s.file && fileStatus.get(s.file) === 'missing') ? `<div class="badges">${st.unsaved.has(s.id) ? '<span class="badge">не сохранена</span>' : ''}${s.file && fileStatus.get(s.file) === 'missing' ? '<span class="badge bad">нет на GitHub</span>' : ''}</div>` : ''}</div>
+      <div class="t"><div><b>${esc(s.title)}</b></div><div class="a">${esc(s.artist)}${s.file ? ' · mp3' : ''}${s.start ? ' · с ' + fmtTime(s.start) : ''}</div>${st.unsaved.has(s.id) || ytBlocked(s) || (s.file && fileStatus.get(s.file) === 'missing') ? `<div class="badges">${ytBlocked(s) ? '<span class="badge bad">YouTube · нужен VPN</span>' : ''}${st.unsaved.has(s.id) ? '<span class="badge">не сохранена</span>' : ''}${s.file && fileStatus.get(s.file) === 'missing' ? '<span class="badge bad">нет на GitHub</span>' : ''}</div>` : ''}</div>
       ${s.file && fileStatus.get(s.file) === 'missing' ? '<button class="icon-btn" data-act="dl" title="Скачать отрывок ещё раз">⬇</button>' : ''}
       <button class="icon-btn" data-act="play" title="Проверить">▶</button>
       <button class="icon-btn" data-act="edit" title="Изменить">✎</button>
@@ -1073,6 +1108,14 @@ $('#bulk-add').addEventListener('click', () => {
   if (!bad.length) $('#bulk-text').value = '';
   renderSongs();
 });
+let resetArmed = false;
+$('#reset-local').addEventListener('click', () => {
+  const b = $('#reset-local');
+  if (!resetArmed){ resetArmed = true; b.textContent = 'Точно сбросить? Нажми ещё раз'; setTimeout(() => { resetArmed = false; b.textContent = 'Сбросить и взять список из songs.json'; }, 4000); return; }
+  resetArmed = false; b.textContent = 'Сбросить и взять список из songs.json';
+  store.set(LS_SONGS, null); store.set(LS_REMOVED, []);
+  loadLibrary(); renderSongs(); toast('Готово: список как в songs.json');
+});
 $('#export-copy').addEventListener('click', async () => {
   const t = $('#export-text');
   try { await navigator.clipboard.writeText(t.value); toast('Скопировано'); }
@@ -1098,7 +1141,7 @@ async function boot(){
   applyAdmin();
   loadLibrary();
   booted = true;
+  if (ytSongs().length) Player.init();
   show('home');
 }
-Player.init();
 boot();
